@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.vsix
+gha.zip
+extracted_vsix/
+.playwright-mcp/
+icon-check.png
+.vscode/

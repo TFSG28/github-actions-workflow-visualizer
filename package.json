@@ -1,0 +1,165 @@
+{
+  "name": "github-actions-workflow-visualizer",
+  "displayName": "GitHub Actions Workflow Visualizer",
+  "description": "View, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job graph. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
+  "version": "0.7.0",
+  "publisher": "TFSG28",
+  "license": "MIT",
+  "author": "Tiago Gonçalves",
+  "icon": "images/icon.png",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "github actions",
+    "github",
+    "actions",
+    "workflow",
+    "workflows",
+    "ci",
+    "cd",
+    "ci/cd",
+    "pipeline",
+    "runs",
+    "devops",
+    "kiro",
+    "cursor",
+    "windsurf"
+  ],
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/TFSG28/github-actions-workflow-visualizer#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TFSG28/github-actions-workflow-visualizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TFSG28/github-actions-workflow-visualizer/issues"
+  },
+  "activationEvents": [
+    "onView:ghaRunsView"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ghaRunsViewer.setToken",
+        "title": "GHA Runs: Set GitHub Token"
+      },
+      {
+        "command": "ghaRunsViewer.clearToken",
+        "title": "GHA Runs: Clear GitHub Token"
+      },
+      {
+        "command": "ghaRunsViewer.setRepo",
+        "title": "GHA Runs: Set Repository (owner/repo)"
+      },
+      {
+        "command": "ghaRunsViewer.refresh",
+        "title": "GHA Runs: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ghaRunsViewer.openRun",
+        "title": "GHA Runs: Open Run in Browser"
+      },
+      {
+        "command": "ghaRunsViewer.rerunRun",
+        "title": "Rerun Workflow...",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "ghaRunsViewer.viewRunDetails",
+        "title": "View Run Details"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ghaRunsContainer",
+          "title": "GHA Runs",
+          "icon": "$(pulse)"
+        }
+      ]
+    },
+    "views": {
+      "ghaRunsContainer": [
+        {
+          "id": "ghaRunsView",
+          "name": "Workflow Runs"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "ghaRunsViewer.refresh",
+          "when": "view == ghaRunsView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ghaRunsViewer.rerunRun",
+          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "group": "inline"
+        },
+        {
+          "command": "ghaRunsViewer.viewRunDetails",
+          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "ghaRunsViewer.rerunRun",
+          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "ghaRunsViewer.openRun",
+          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "group": "1_actions@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GHA Runs Viewer",
+      "properties": {
+        "ghaRunsViewer.repository": {
+          "type": "string",
+          "default": "",
+          "description": "Optional manual override, owner/repo format. Leave empty to auto-detect from the current folder's .git/config."
+        },
+        "ghaRunsViewer.pollIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "How often to auto-refresh the run list, in seconds. Set to 0 to disable auto-refresh."
+        },
+        "ghaRunsViewer.branch": {
+          "type": "string",
+          "default": "",
+          "description": "Optional: only show runs for this branch. Leave empty to show all branches."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
+    "icon": "node scripts/generate-icon.mjs",
+    "package": "npm run build && vsce package --no-dependencies",
+    "publish:ovsx": "ovsx publish --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
+    "ovsx": "^1.0.2",
+    "typescript": "^5.4.0"
+  }
+}

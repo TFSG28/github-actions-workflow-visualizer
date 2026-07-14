@@ -1,0 +1,12 @@
+.git/**
+.github/**
+.vscode/**
+node_modules/**
+src/**
+scripts/**
+extracted_vsix/**
+gha.zip
+*.vsix
+tsconfig.json
+.gitignore
+.vscodeignore
