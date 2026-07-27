@@ -2,6 +2,19 @@
 
 All notable changes to this extension are documented here.
 
+## 0.9.2
+
+- **Fixed repository auto-detection.** Tree items now have stable ids, so repository
+  groups no longer collapse/flicker on every poll (which made multi-repo mode look
+  broken). Detection also handles `.git` *files* (submodules and worktrees) and parses
+  more remote URL forms (trailing slash, `ssh://`, scp-style, no `.git` suffix).
+- **Performance.** Polling now pauses while the view is hidden or the window is
+  unfocused, and resumes on focus. Annotations are only fetched for jobs that didn't
+  pass, eliminating an N+1 request storm on each poll. Repository resolution is cached
+  (no repeated `.git/config` reads), and the run-details view stops polling while its
+  tab is in the background.
+- Added a detection regression test (`npm run check`).
+
 ## 0.9.1
 
 - **Multiple repositories** — track several repos via the new `ghaRunsViewer.repositories`

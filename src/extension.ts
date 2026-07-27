@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { parseGithubRepoFromGitConfig } from './gitConfig';
 
 const TOKEN_SECRET_KEY = 'ghaRunsViewer.githubToken';
 
@@ -137,6 +138,8 @@ function parseJobDependencies(yamlText: string): Map<string, string[]> {
 class RunItem extends vscode.TreeItem {
   constructor(public readonly run: WorkflowRun) {
     super(`#${run.run_number} ${run.display_title || run.name}`, vscode.TreeItemCollapsibleState.None);
+    // Stable id keeps VS Code from re-rendering/flickering the row on each poll.
+    this.id = `run:${run.repo ?? ''}:${run.id}`;
 
     const state = run.status === 'completed' ? (run.conclusion || 'unknown') : run.status;
     this.description = `${run.head_branch}  ${state}`;
@@ -159,11 +162,11 @@ function detectReposFromGitConfig(): string[] {
 
   const repos: string[] = [];
   for (const folder of folders) {
-    const gitConfigPath = path.join(folder.uri.fsPath, '.git', 'config');
+    const gitConfigPath = resolveGitConfigPath(folder.uri.fsPath);
+    if (!gitConfigPath) {
+      continue;
+    }
     try {
-      if (!fs.existsSync(gitConfigPath)) {
-        continue;
-      }
       const contents = fs.readFileSync(gitConfigPath, 'utf8');
       const match = parseGithubRepoFromGitConfig(contents);
       if (match) {
@@ -176,32 +179,47 @@ function detectReposFromGitConfig(): string[] {
   return repos;
 }
 
-function parseGithubRepoFromGitConfig(contents: string): string | null {
-  // Look for a remote "origin" URL first, then fall back to any github.com remote.
-  const remoteBlocks = contents.split(/\[remote /).slice(1);
-  const urls: { name: string; url: string }[] = [];
-
-  for (const block of remoteBlocks) {
-    const nameMatch = block.match(/^"([^"]+)"\]/);
-    const urlMatch = block.match(/url\s*=\s*(.+)/);
-    if (nameMatch && urlMatch) {
-      urls.push({ name: nameMatch[1], url: urlMatch[1].trim() });
+/**
+ * Resolve the path to a folder's git `config`, handling the normal `.git/`
+ * directory as well as the `.git` *file* used by submodules and worktrees
+ * (which contains a `gitdir:` pointer).
+ */
+function resolveGitConfigPath(folderPath: string): string | null {
+  const gitPath = path.join(folderPath, '.git');
+  try {
+    const stat = fs.statSync(gitPath);
+    if (stat.isDirectory()) {
+      return path.join(gitPath, 'config');
     }
-  }
-
-  const preferred = urls.find((r) => r.name === 'origin') || urls.find((r) => r.url.includes('github.com'));
-  if (!preferred) {
-    return null;
-  }
-
-  return parseOwnerRepoFromUrl(preferred.url);
-}
-
-function parseOwnerRepoFromUrl(url: string): string | null {
-  // Handles: https://github.com/owner/repo.git, git@github.com:owner/repo.git, ssh://git@github.com/owner/repo.git
-  const httpsMatch = url.match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?$/);
-  if (httpsMatch) {
-    return `${httpsMatch[1]}/${httpsMatch[2]}`;
+    if (stat.isFile()) {
+      const pointer = fs.readFileSync(gitPath, 'utf8').match(/gitdir:\s*(.+)/);
+      if (!pointer) {
+        return null;
+      }
+      let gitDir = pointer[1].trim();
+      if (!path.isAbsolute(gitDir)) {
+        gitDir = path.resolve(folderPath, gitDir);
+      }
+      // A plain submodule keeps its config here.
+      const direct = path.join(gitDir, 'config');
+      if (fs.existsSync(direct)) {
+        return direct;
+      }
+      // A worktree points at a per-worktree dir; the shared config lives in commondir.
+      const commonDirFile = path.join(gitDir, 'commondir');
+      if (fs.existsSync(commonDirFile)) {
+        let common = fs.readFileSync(commonDirFile, 'utf8').trim();
+        if (!path.isAbsolute(common)) {
+          common = path.resolve(gitDir, common);
+        }
+        const commonConfig = path.join(common, 'config');
+        if (fs.existsSync(commonConfig)) {
+          return commonConfig;
+        }
+      }
+    }
+  } catch {
+    // Not a git folder, or unreadable.
   }
   return null;
 }
@@ -231,6 +249,8 @@ class MessageItem extends vscode.TreeItem {
 class RepoItem extends vscode.TreeItem {
   constructor(public readonly repo: string, count: number) {
     super(repo, vscode.TreeItemCollapsibleState.Expanded);
+    // Stable id preserves the expand/collapse state across refreshes.
+    this.id = `repo:${repo}`;
     this.description = count === 1 ? '1 run' : `${count} runs`;
     this.iconPath = new vscode.ThemeIcon('repo');
     this.contextValue = 'ghaRepo';
@@ -249,6 +269,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private etags = new Map<string, string>();
   private inFlight: Promise<void> | null = null;
   private statusFilter: string | null = null;
+  private reposCache: string[] | null = null;
 
   constructor(private context: vscode.ExtensionContext) {}
 
@@ -256,9 +277,10 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     this._onDidChangeTreeData.fire();
   }
 
-  /** Drop the cached ETags so the next refresh always fetches fresh data. */
+  /** Drop cached ETags and the resolved-repo list so the next refresh is fresh. */
   resetCache(): void {
     this.etags.clear();
+    this.reposCache = null;
   }
 
   getFilter(): string | null {
@@ -321,8 +343,15 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     return filtered.map((r) => new RunItem(r));
   }
 
-  /** All repositories to query: configured list + legacy single + auto-detected, deduped. */
+  /**
+   * All repositories to query: configured list + legacy single + auto-detected,
+   * deduped. Cached because auto-detection reads .git/config from disk; the cache
+   * is cleared on config or workspace-folder changes via resetCache().
+   */
   getResolvedRepos(): string[] {
+    if (this.reposCache) {
+      return this.reposCache;
+    }
     const config = vscode.workspace.getConfiguration('ghaRunsViewer');
     const list = config.get<string[]>('repositories', []) || [];
     const single = config.get<string>('repository', '').trim();
@@ -338,6 +367,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         result.push(r);
       }
     }
+    this.reposCache = result;
     return result;
   }
 
@@ -666,8 +696,13 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     if (!repo) {
       return result;
     }
+    // ponytail: only query annotations for jobs that aren't a clean success.
+    // Annotations are one HTTP request per job, so fetching them for every green
+    // job is an N+1 storm on each poll. Ceiling: warnings/notices on an otherwise
+    // successful job won't be shown until it fails.
+    const relevant = jobs.filter((job) => !(job.status === 'completed' && job.conclusion === 'success'));
     await Promise.all(
-      jobs.map(async (job) => {
+      relevant.map(async (job) => {
         const annotations = await this.fetchAnnotationsForJob(repo, job.id);
         if (annotations.length > 0) {
           result.set(job.id, annotations);
@@ -1543,6 +1578,12 @@ function showRunDetails(
     if (disposed) {
       return;
     }
+    // Don't spend API calls while the panel is in a background tab; just
+    // reschedule and pick up again when it's visible.
+    if (!panel.visible) {
+      setTimeout(poll, 8000);
+      return;
+    }
     const freshRun = (await provider.fetchSingleRun(run)) || run;
     const freshJobs = (await provider.fetchRunJobs(freshRun)) || jobs;
     const freshAnnotations = await provider.fetchAllAnnotations(freshRun.repo, freshJobs);
@@ -1585,7 +1626,16 @@ function makeNonce(): string {
 
 export function activate(context: vscode.ExtensionContext) {
   const provider = new RunsProvider(context);
-  vscode.window.registerTreeDataProvider('ghaRunsView', provider);
+  const treeView = vscode.window.createTreeView('ghaRunsView', { treeDataProvider: provider });
+  context.subscriptions.push(treeView);
+
+  // Re-detect repositories when the set of workspace folders changes.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      provider.resetCache();
+      provider.refresh();
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('ghaRunsViewer.setToken', async () => {
@@ -1740,9 +1790,24 @@ export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration('ghaRunsViewer');
   const intervalSeconds = config.get<number>('pollIntervalSeconds', 30);
   if (intervalSeconds > 0) {
-    const interval = setInterval(() => provider.refresh(), intervalSeconds * 1000);
+    // Only poll while the view is actually visible and the window is focused.
+    // This avoids burning API calls (and rate limit) when the panel is hidden.
+    const interval = setInterval(() => {
+      if (treeView.visible && vscode.window.state.focused) {
+        provider.refresh();
+      }
+    }, intervalSeconds * 1000);
     context.subscriptions.push({ dispose: () => clearInterval(interval) });
   }
+
+  // Refresh once when the view becomes visible again so stale data updates promptly.
+  context.subscriptions.push(
+    treeView.onDidChangeVisibility((e) => {
+      if (e.visible) {
+        provider.refresh();
+      }
+    })
+  );
 
   provider.refresh();
 }
