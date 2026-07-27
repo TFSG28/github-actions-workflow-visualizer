@@ -2,7 +2,7 @@
   "name": "github-actions-workflow-visualizer",
   "displayName": "GitHub Actions Workflow Visualizer",
   "description": "Visualize, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job dependency graph and syntax highlighting for workflow expressions. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "TFSG28",
   "license": "MIT",
   "author": "Tiago Gonçalves",
@@ -66,7 +66,7 @@
       },
       {
         "command": "ghaRunsViewer.setRepo",
-        "title": "GHA Runs: Set Repository (owner/repo)"
+        "title": "GHA Runs: Set Repositories (owner/repo)"
       },
       {
         "command": "ghaRunsViewer.refresh",
@@ -181,10 +181,18 @@
     "configuration": {
       "title": "GHA Runs Viewer",
       "properties": {
+        "ghaRunsViewer.repositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Repositories to track, each in owner/repo format. When more than one is resolved (including auto-detected repos), the sidebar groups runs by repository. Leave empty to auto-detect from your workspace folders' .git/config."
+        },
         "ghaRunsViewer.repository": {
           "type": "string",
           "default": "",
-          "description": "Optional manual override, owner/repo format. Leave empty to auto-detect from the current folder's .git/config."
+          "description": "Deprecated: use 'ghaRunsViewer.repositories'. Optional single owner/repo override, merged with the repositories list for backward compatibility."
         },
         "ghaRunsViewer.pollIntervalSeconds": {
           "type": "number",

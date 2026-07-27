@@ -48,6 +48,8 @@ interface WorkflowRun {
   event: string;
   path: string;
   actor?: { login: string };
+  /** owner/repo this run was fetched from; set by the provider at load time. */
+  repo?: string;
 }
 
 function parseJobDependencies(yamlText: string): Map<string, string[]> {
@@ -138,7 +140,7 @@ class RunItem extends vscode.TreeItem {
 
     const state = run.status === 'completed' ? (run.conclusion || 'unknown') : run.status;
     this.description = `${run.head_branch}  ${state}`;
-    this.tooltip = `${run.name}\nBranch: ${run.head_branch}\nEvent: ${run.event}\nStatus: ${state}\nCreated: ${run.created_at}`;
+    this.tooltip = `${run.name}${run.repo ? `\nRepository: ${run.repo}` : ''}\nBranch: ${run.head_branch}\nEvent: ${run.event}\nStatus: ${state}\nCreated: ${run.created_at}`;
     this.iconPath = iconForState(run.status, run.conclusion);
     this.command = {
       command: 'ghaRunsViewer.viewRunDetails',
@@ -149,12 +151,13 @@ class RunItem extends vscode.TreeItem {
   }
 }
 
-function detectRepoFromGitConfig(): string | null {
+function detectReposFromGitConfig(): string[] {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
-    return null;
+    return [];
   }
 
+  const repos: string[] = [];
   for (const folder of folders) {
     const gitConfigPath = path.join(folder.uri.fsPath, '.git', 'config');
     try {
@@ -164,13 +167,13 @@ function detectRepoFromGitConfig(): string | null {
       const contents = fs.readFileSync(gitConfigPath, 'utf8');
       const match = parseGithubRepoFromGitConfig(contents);
       if (match) {
-        return match;
+        repos.push(match);
       }
     } catch {
       // Ignore and try the next folder.
     }
   }
-  return null;
+  return repos;
 }
 
 function parseGithubRepoFromGitConfig(contents: string): string | null {
@@ -225,14 +228,25 @@ class MessageItem extends vscode.TreeItem {
   }
 }
 
+class RepoItem extends vscode.TreeItem {
+  constructor(public readonly repo: string, count: number) {
+    super(repo, vscode.TreeItemCollapsibleState.Expanded);
+    this.description = count === 1 ? '1 run' : `${count} runs`;
+    this.iconPath = new vscode.ThemeIcon('repo');
+    this.contextValue = 'ghaRepo';
+  }
+}
+
 class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private runs: WorkflowRun[] = [];
+  private runsByRepo = new Map<string, WorkflowRun[]>();
+  private resolvedRepos: string[] = [];
   private loading = false;
   private lastError: string | null = null;
-  private etag: string | null = null;
+  private etags = new Map<string, string>();
   private inFlight: Promise<void> | null = null;
   private statusFilter: string | null = null;
 
@@ -242,9 +256,9 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     this._onDidChangeTreeData.fire();
   }
 
-  /** Drop the cached ETag so the next refresh always fetches fresh data. */
+  /** Drop the cached ETags so the next refresh always fetches fresh data. */
   resetCache(): void {
-    this.etag = null;
+    this.etags.clear();
   }
 
   getFilter(): string | null {
@@ -270,7 +284,16 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     return element;
   }
 
-  async getChildren(): Promise<vscode.TreeItem[]> {
+  async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
+    // Second level: the runs belonging to a repository node.
+    if (element instanceof RepoItem) {
+      const runs = this.applyFilter(this.runsByRepo.get(element.repo) || []);
+      if (runs.length === 0) {
+        return [new MessageItem(this.statusFilter ? 'No matching runs.' : 'No runs.')];
+      }
+      return runs.map((r) => new RunItem(r));
+    }
+
     await this.loadRuns();
 
     if (this.lastError) {
@@ -279,6 +302,15 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     if (this.loading) {
       return [new MessageItem('Loading runs...')];
     }
+
+    // More than one repository: show a repo node per repository.
+    if (this.resolvedRepos.length > 1) {
+      return this.resolvedRepos.map(
+        (repo) => new RepoItem(repo, this.applyFilter(this.runsByRepo.get(repo) || []).length)
+      );
+    }
+
+    // Single repository: keep the flat run list.
     if (this.runs.length === 0) {
       return [new MessageItem('No runs found.')];
     }
@@ -289,13 +321,28 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     return filtered.map((r) => new RunItem(r));
   }
 
-  getResolvedRepo(): string | null {
+  /** All repositories to query: configured list + legacy single + auto-detected, deduped. */
+  getResolvedRepos(): string[] {
     const config = vscode.workspace.getConfiguration('ghaRunsViewer');
-    const manual = config.get<string>('repository', '').trim();
-    if (manual && manual.includes('/')) {
-      return manual;
+    const list = config.get<string[]>('repositories', []) || [];
+    const single = config.get<string>('repository', '').trim();
+    const configured = [...list, single].map((r) => (r || '').trim()).filter((r) => r.includes('/'));
+    const all = [...configured, ...detectReposFromGitConfig()];
+
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const r of all) {
+      const key = r.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(r);
+      }
     }
-    return detectRepoFromGitConfig();
+    return result;
+  }
+
+  private repoOf(run: WorkflowRun): string | null {
+    return run.repo ?? this.getResolvedRepos()[0] ?? null;
   }
 
   async loadRuns(): Promise<void> {
@@ -313,12 +360,14 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private async loadRunsInternal(): Promise<void> {
     const config = vscode.workspace.getConfiguration('ghaRunsViewer');
     const branch = config.get<string>('branch', '').trim();
-    const repo = this.getResolvedRepo();
+    const repos = this.getResolvedRepos();
+    this.resolvedRepos = repos;
 
-    if (!repo) {
-      this.lastError = 'No GitHub repository detected in this folder. Run "GHA Runs: Set Repository" to set one manually.';
+    if (repos.length === 0) {
+      this.lastError = 'No GitHub repository detected. Run "GHA Runs: Set Repositories" to add one or more (owner/repo).';
       this.runs = [];
-      this.etag = null;
+      this.runsByRepo.clear();
+      this.etags.clear();
       return;
     }
 
@@ -326,50 +375,82 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     if (!token) {
       this.lastError = 'No GitHub token set. Run "GHA Runs: Set GitHub Token".';
       this.runs = [];
-      this.etag = null;
+      this.runsByRepo.clear();
+      this.etags.clear();
       return;
     }
 
     this.loading = true;
     this.lastError = null;
 
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'gha-runs-viewer-extension'
+    };
+
     try {
-      const [owner, repoName] = repo.split('/');
-      let url = `https://api.github.com/repos/${owner}/${repoName}/actions/runs?per_page=20`;
-      if (branch) {
-        url += `&branch=${encodeURIComponent(branch)}`;
+      const errors = await Promise.all(repos.map((repo) => this.loadRepoRuns(repo, branch, headers)));
+
+      // Forget repositories that are no longer resolved.
+      for (const key of Array.from(this.runsByRepo.keys())) {
+        if (!repos.includes(key)) {
+          this.runsByRepo.delete(key);
+          this.etags.delete(key);
+        }
       }
 
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'gha-runs-viewer-extension'
-      };
-      // A conditional request with a matching ETag returns 304 and does not
-      // count against the GitHub API rate limit, which matters given the
-      // default 30s poll interval.
-      if (this.etag) {
-        headers['If-None-Match'] = this.etag;
+      const merged: WorkflowRun[] = [];
+      for (const repo of repos) {
+        merged.push(...(this.runsByRepo.get(repo) || []));
       }
+      merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      this.runs = merged;
 
+      // Only surface an error when there is nothing to show; a partial failure
+      // (one bad repo) should not hide runs from the healthy repositories.
+      const firstError = errors.find((e): e is string => !!e);
+      this.lastError = merged.length === 0 && firstError ? firstError : null;
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  /**
+   * Fetch one repository's runs into the per-repo cache. Returns an error
+   * string on failure, or null on success / 304-not-modified.
+   */
+  private async loadRepoRuns(repo: string, branch: string, baseHeaders: Record<string, string>): Promise<string | null> {
+    const [owner, repoName] = repo.split('/');
+    let url = `https://api.github.com/repos/${owner}/${repoName}/actions/runs?per_page=20`;
+    if (branch) {
+      url += `&branch=${encodeURIComponent(branch)}`;
+    }
+
+    const headers: Record<string, string> = { ...baseHeaders };
+    // A conditional request with a matching ETag returns 304 and does not count
+    // against the rate limit, which matters given the default 30s poll interval.
+    const etag = this.etags.get(repo);
+    if (etag) {
+      headers['If-None-Match'] = etag;
+    }
+
+    try {
       const response = await fetch(url, { headers });
 
       if (response.status === 304) {
-        // Not modified: keep the previously loaded runs as-is.
-        return;
+        return null; // Not modified: keep the cached runs for this repo.
       }
       if (response.status === 401) {
-        this.lastError = 'GitHub token is invalid or expired. Run "GHA Runs: Set GitHub Token" to update it.';
-        this.runs = [];
-        this.etag = null;
-        return;
+        this.runsByRepo.set(repo, []);
+        this.etags.delete(repo);
+        return 'GitHub token is invalid or expired. Run "GHA Runs: Set GitHub Token" to update it.';
       }
       if (response.status === 404) {
-        this.lastError = 'Repository not found or token lacks access. Check "GHA Runs: Set Repository".';
-        this.runs = [];
-        this.etag = null;
-        return;
+        this.runsByRepo.set(repo, []);
+        this.etags.delete(repo);
+        return `Repository ${repo} not found or token lacks access.`;
       }
       if (response.status === 403 || response.status === 429) {
         const resetHeader = response.headers.get('x-ratelimit-reset');
@@ -384,25 +465,29 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
             when = `in ~${secs}s`;
           }
         }
-        this.lastError = `GitHub API rate limit hit. Try again ${when}.`;
-        return;
+        return `GitHub API rate limit hit. Try again ${when}.`; // keep cached runs
       }
       if (!response.ok) {
-        this.lastError = `GitHub API error: ${response.status} ${response.statusText}`;
-        this.runs = [];
-        this.etag = null;
-        return;
+        this.runsByRepo.set(repo, []);
+        this.etags.delete(repo);
+        return `GitHub API error for ${repo}: ${response.status} ${response.statusText}`;
       }
 
-      this.etag = response.headers.get('etag');
+      const newEtag = response.headers.get('etag');
+      if (newEtag) {
+        this.etags.set(repo, newEtag);
+      } else {
+        this.etags.delete(repo);
+      }
       const data = (await response.json()) as { workflow_runs: WorkflowRun[] };
-      this.runs = data.workflow_runs || [];
+      const runs = (data.workflow_runs || []).map((r) => {
+        r.repo = repo;
+        return r;
+      });
+      this.runsByRepo.set(repo, runs);
+      return null;
     } catch (err: any) {
-      this.lastError = `Request failed: ${err?.message || String(err)}`;
-      this.runs = [];
-      this.etag = null;
-    } finally {
-      this.loading = false;
+      return `Request failed for ${repo}: ${err?.message || String(err)}`;
     }
   }
 
@@ -421,9 +506,9 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async rerunRun(run: WorkflowRun): Promise<void> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo) {
-      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repository".');
+      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repositories".');
       return;
     }
     const headers = await this.authHeaders();
@@ -449,9 +534,9 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async rerunFailedJobs(run: WorkflowRun): Promise<void> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo) {
-      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repository".');
+      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repositories".');
       return;
     }
     const headers = await this.authHeaders();
@@ -477,9 +562,9 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async cancelRun(run: WorkflowRun): Promise<void> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo) {
-      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repository".');
+      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repositories".');
       return;
     }
     const headers = await this.authHeaders();
@@ -508,7 +593,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async fetchRunJobs(run: WorkflowRun): Promise<RunJob[] | null> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo) {
       return null;
     }
@@ -535,7 +620,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async fetchSingleRun(run: WorkflowRun): Promise<WorkflowRun | null> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo) {
       return null;
     }
@@ -550,17 +635,15 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
       if (!response.ok) {
         return null;
       }
-      return (await response.json()) as WorkflowRun;
+      const fresh = (await response.json()) as WorkflowRun;
+      fresh.repo = repo; // preserve the source repo across refreshes
+      return fresh;
     } catch {
       return null;
     }
   }
 
-  async fetchAnnotationsForJob(jobId: number): Promise<Annotation[]> {
-    const repo = this.getResolvedRepo();
-    if (!repo) {
-      return [];
-    }
+  async fetchAnnotationsForJob(repo: string, jobId: number): Promise<Annotation[]> {
     const headers = await this.authHeaders();
     if (!headers) {
       return [];
@@ -578,11 +661,14 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     }
   }
 
-  async fetchAllAnnotations(jobs: RunJob[]): Promise<Map<number, Annotation[]>> {
+  async fetchAllAnnotations(repo: string | undefined, jobs: RunJob[]): Promise<Map<number, Annotation[]>> {
     const result = new Map<number, Annotation[]>();
+    if (!repo) {
+      return result;
+    }
     await Promise.all(
       jobs.map(async (job) => {
-        const annotations = await this.fetchAnnotationsForJob(job.id);
+        const annotations = await this.fetchAnnotationsForJob(repo, job.id);
         if (annotations.length > 0) {
           result.set(job.id, annotations);
         }
@@ -592,7 +678,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async fetchWorkflowDependencies(run: WorkflowRun): Promise<Map<string, string[]> | null> {
-    const repo = this.getResolvedRepo();
+    const repo = this.repoOf(run);
     if (!repo || !run.path) {
       return null;
     }
@@ -1459,7 +1545,7 @@ function showRunDetails(
     }
     const freshRun = (await provider.fetchSingleRun(run)) || run;
     const freshJobs = (await provider.fetchRunJobs(freshRun)) || jobs;
-    const freshAnnotations = await provider.fetchAllAnnotations(freshJobs);
+    const freshAnnotations = await provider.fetchAllAnnotations(freshRun.repo, freshJobs);
     if (disposed) {
       return;
     }
@@ -1525,18 +1611,29 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('ghaRunsViewer.setRepo', async () => {
       const config = vscode.workspace.getConfiguration('ghaRunsViewer');
-      const current = config.get<string>('repository', '');
-      const repo = await vscode.window.showInputBox({
-        prompt: 'Repository in owner/repo format',
+      const existing = config.get<string[]>('repositories', []) || [];
+      const legacy = config.get<string>('repository', '').trim();
+      const current = (existing.length ? existing : legacy ? [legacy] : []).join(', ');
+      const input = await vscode.window.showInputBox({
+        prompt: 'Repositories to track, in owner/repo format (comma-separated for multiple)',
         value: current,
-        placeHolder: 'gealtach/gocreditoPlatform',
+        placeHolder: 'octocat/hello-world, myorg/api',
         ignoreFocusOut: true
       });
-      if (repo) {
-        await config.update('repository', repo.trim(), vscode.ConfigurationTarget.Global);
-        provider.resetCache();
-        provider.refresh();
+      if (input === undefined) {
+        return;
       }
+      const repos = input
+        .split(/[,\n]/)
+        .map((s) => s.trim())
+        .filter((s) => s.includes('/'));
+      await config.update('repositories', repos, vscode.ConfigurationTarget.Global);
+      // Migrate off the legacy single-repo setting so it isn't merged in twice.
+      if (legacy) {
+        await config.update('repository', '', vscode.ConfigurationTarget.Global);
+      }
+      provider.resetCache();
+      provider.refresh();
     }),
 
     vscode.commands.registerCommand('ghaRunsViewer.refresh', () => {
@@ -1618,7 +1715,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (jobs) {
         const [deps, annotations] = await Promise.all([
           provider.fetchWorkflowDependencies(item.run),
-          provider.fetchAllAnnotations(jobs)
+          provider.fetchAllAnnotations(item.run.repo, jobs)
         ]);
         showRunDetails(provider, item.run, jobs, deps, annotations);
       }
@@ -1629,7 +1726,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       // A manually edited repository/branch filter invalidates the ETag
       // cache, since a 304 would otherwise silently keep showing stale runs.
-      if (e.affectsConfiguration('ghaRunsViewer.repository') || e.affectsConfiguration('ghaRunsViewer.branch')) {
+      if (
+        e.affectsConfiguration('ghaRunsViewer.repository') ||
+        e.affectsConfiguration('ghaRunsViewer.repositories') ||
+        e.affectsConfiguration('ghaRunsViewer.branch')
+      ) {
         provider.resetCache();
         provider.refresh();
       }

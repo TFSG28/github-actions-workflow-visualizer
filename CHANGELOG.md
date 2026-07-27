@@ -2,6 +2,15 @@
 
 All notable changes to this extension are documented here.
 
+## 0.9.1
+
+- **Multiple repositories** — track several repos via the new `ghaRunsViewer.repositories`
+  setting (or auto-detected across all workspace folders). The sidebar groups runs under
+  a node per repository when more than one is resolved, and stays a flat list for a single
+  repo. Runs are cached and rate-limited (ETag) per repository, and rerun/cancel/details
+  act on each run's own repository.
+- The legacy `ghaRunsViewer.repository` setting still works and is merged into the list.
+
 ## 0.9.0
 
 - **Cancel runs** — cancel an in-progress workflow run from the sidebar context menu or

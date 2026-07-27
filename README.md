@@ -27,6 +27,9 @@ official GitHub Actions extension can't detect your repository, including **Kiro
 - **Filter by status** — narrow the sidebar to success, failure, in-progress, or cancelled.
 - **Fluid graph navigation** — pan, cursor-anchored zoom, fit-to-view, and keyboard
   shortcuts (`+` / `-` / `0`), with a status legend and a smooth staggered reveal.
+- **Multiple repositories** — track several repos at once. The sidebar groups runs
+  under a node per repository (and stays a flat list when you only track one). Repos
+  are auto-detected across all your workspace folders, or set explicitly.
 - **Works without a git provider** — auto-detects `owner/repo` from `.git/config`,
   or set it manually. No GitHub sign-in flow required.
 - **Rate-limit friendly** — conditional `ETag` requests mean unchanged polls don't
@@ -42,8 +45,9 @@ official GitHub Actions extension can't detect your repository, including **Kiro
    - A classic PAT with the `repo` scope (add `workflow` to rerun runs), or
    - A fine-grained PAT with read access to **Actions** and **Contents** for the repo
      (add **Actions: read and write** to rerun).
-4. The repo is auto-detected from your folder's git remote. To override, run
-   **GHA Runs: Set Repository** and enter `owner/repo`.
+4. Repos are auto-detected from your workspace folders' git remotes. To track specific
+   ones, run **GHA Runs: Set Repositories** and enter one or more `owner/repo`
+   (comma-separated).
 5. The sidebar fills with recent runs. Click a run to open the interactive graph.
 
 ## Commands
@@ -52,7 +56,7 @@ official GitHub Actions extension can't detect your repository, including **Kiro
 | --- | --- |
 | `GHA Runs: Set GitHub Token` | Store a Personal Access Token in secret storage. |
 | `GHA Runs: Clear GitHub Token` | Remove the stored token. |
-| `GHA Runs: Set Repository (owner/repo)` | Manually set the repository to query. |
+| `GHA Runs: Set Repositories (owner/repo)` | Set one or more repositories to track (comma-separated). |
 | `GHA Runs: Filter by Status` | Filter the sidebar by run status. |
 | `GHA Runs: Refresh` | Refresh the run list now. |
 | `GHA Runs: Open Run in Browser` | Open the selected run on github.com. |
@@ -65,7 +69,8 @@ official GitHub Actions extension can't detect your repository, including **Kiro
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `ghaRunsViewer.repository` | `""` | `owner/repo` to query. Empty = auto-detect from `.git/config`. |
+| `ghaRunsViewer.repositories` | `[]` | List of `owner/repo` to track. Empty = auto-detect from your workspace folders' `.git/config`. |
+| `ghaRunsViewer.repository` | `""` | Deprecated single-repo override, merged with the list above for backward compatibility. |
 | `ghaRunsViewer.branch` | `""` | Restrict runs to a single branch. Empty = all branches. |
 | `ghaRunsViewer.pollIntervalSeconds` | `30` | Auto-refresh interval in seconds. `0` disables auto-refresh. |
 
