@@ -10,3 +10,6 @@ gha.zip
 tsconfig.json
 .gitignore
 .vscodeignore
+.impeccable.md
+.preview/**
+.playwright-mcp/**

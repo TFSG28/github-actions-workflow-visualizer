@@ -145,7 +145,7 @@ class RunItem extends vscode.TreeItem {
       title: 'View Run Details',
       arguments: [this]
     };
-    this.contextValue = 'ghaRun';
+    this.contextValue = run.status === 'completed' ? 'ghaRun' : 'ghaRunRunning';
   }
 }
 
@@ -234,6 +234,7 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private lastError: string | null = null;
   private etag: string | null = null;
   private inFlight: Promise<void> | null = null;
+  private statusFilter: string | null = null;
 
   constructor(private context: vscode.ExtensionContext) {}
 
@@ -244,6 +245,25 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   /** Drop the cached ETag so the next refresh always fetches fresh data. */
   resetCache(): void {
     this.etag = null;
+  }
+
+  getFilter(): string | null {
+    return this.statusFilter;
+  }
+
+  setFilter(filter: string | null): void {
+    this.statusFilter = filter;
+    this.refresh();
+  }
+
+  private applyFilter(runs: WorkflowRun[]): WorkflowRun[] {
+    if (!this.statusFilter) {
+      return runs;
+    }
+    if (this.statusFilter === 'in_progress') {
+      return runs.filter((r) => r.status !== 'completed');
+    }
+    return runs.filter((r) => r.status === 'completed' && r.conclusion === this.statusFilter);
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -262,7 +282,11 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     if (this.runs.length === 0) {
       return [new MessageItem('No runs found.')];
     }
-    return this.runs.map((r) => new RunItem(r));
+    const filtered = this.applyFilter(this.runs);
+    if (filtered.length === 0) {
+      return [new MessageItem('No runs match the current filter.')];
+    }
+    return filtered.map((r) => new RunItem(r));
   }
 
   getResolvedRepo(): string | null {
@@ -449,6 +473,37 @@ class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
       }
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to rerun failed jobs: ${err?.message || String(err)}`);
+    }
+  }
+
+  async cancelRun(run: WorkflowRun): Promise<void> {
+    const repo = this.getResolvedRepo();
+    if (!repo) {
+      vscode.window.showErrorMessage('No repository resolved. Run "GHA Runs: Set Repository".');
+      return;
+    }
+    const headers = await this.authHeaders();
+    if (!headers) {
+      return;
+    }
+
+    const [owner, repoName] = repo.split('/');
+    const url = `https://api.github.com/repos/${owner}/${repoName}/actions/runs/${run.id}/cancel`;
+
+    try {
+      const response = await fetch(url, { method: 'POST', headers });
+      // GitHub returns 202 Accepted when the cancellation is queued.
+      if (response.status === 202) {
+        vscode.window.showInformationMessage(`Cancellation requested for #${run.run_number} ${run.display_title || run.name}.`);
+        setTimeout(() => this.refresh(), 2000);
+      } else if (response.status === 409) {
+        vscode.window.showWarningMessage(`Run #${run.run_number} is not in a cancellable state.`);
+      } else {
+        const body = await response.text();
+        vscode.window.showErrorMessage(`Failed to cancel run: ${response.status} ${response.statusText} ${body}`);
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to cancel run: ${err?.message || String(err)}`);
     }
   }
 
@@ -658,6 +713,9 @@ interface RunModel {
   metaText: string;
   statusText: string;
   title: string;
+  htmlUrl: string;
+  isRunning: boolean;
+  hasFailure: boolean;
 }
 
 function buildRunModel(
@@ -747,7 +805,7 @@ function buildRunModel(
     .join('');
 
   const nodesHtml = jobs
-    .map((job) => {
+    .map((job, i) => {
       const pos = positions.get(job.name)!;
       const jobState = stateLabel(job.status, job.conclusion);
       const jobAnnotations = annotationsByJob.get(job.id) || [];
@@ -776,7 +834,7 @@ function buildRunModel(
       }
 
       return `
-        <div class="job-node ${jobState}" style="left:${pos.x}px; top:${pos.y}px; width:${pos.width}px;">
+        <div class="job-node ${jobState}" style="left:${pos.x}px; top:${pos.y}px; width:${pos.width}px; --i:${i};">
           <div class="job-header">
             <span class="node ${jobState}"></span>
             <span class="job-name">${escapeHtml(job.name)}</span>
@@ -830,7 +888,10 @@ function buildRunModel(
     annotationsHtml,
     metaText,
     statusText: overallState,
-    title: `#${run.run_number} ${run.display_title || run.name}`
+    title: `#${run.run_number} ${run.display_title || run.name}`,
+    htmlUrl: run.html_url,
+    isRunning: run.status !== 'completed',
+    hasFailure: overallState === 'failure'
   };
 }
 
@@ -888,9 +949,14 @@ function showRunDetails(
     background-color: var(--vscode-editor-background);
     border-bottom: 1px solid var(--vscode-panel-border);
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
+    gap: 16px;
   }
+  .toolbar-info { min-width: 0; }
+  .title-row { display: flex; align-items: center; gap: 10px; }
+  .title-row h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title-row .status-pill { margin-left: 0; }
   .toolbar h1 {
     font-size: 1.1em;
     font-weight: 600;
@@ -929,27 +995,90 @@ function showRunDetails(
     font-size: 0.83em;
     margin-top: 6px;
   }
-  .toolbar-buttons {
+  .toolbar-actions {
     display: flex;
-    gap: 4px;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+  }
+  .btn-group {
+    display: flex;
+    gap: 2px;
     background-color: var(--vscode-editorWidget-background);
     border: 1px solid var(--vscode-panel-border);
     border-radius: 6px;
     padding: 3px;
   }
-  .toolbar-buttons button {
+  .btn {
     background-color: transparent;
     color: var(--vscode-foreground);
     border: none;
-    padding: 4px 11px;
+    padding: 4px 10px;
     border-radius: 4px;
     cursor: pointer;
+    font-family: inherit;
     font-size: 0.85em;
     font-weight: 500;
-    transition: background-color 0.1s ease;
+    white-space: nowrap;
+    transition: background-color 0.1s ease, color 0.1s ease;
   }
-  .toolbar-buttons button:hover {
+  .btn:hover {
     background-color: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  }
+  .btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+  }
+  .btn.icon { min-width: 26px; font-variant-numeric: tabular-nums; }
+  #zoomLabel {
+    min-width: 46px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+  }
+  .btn-danger:hover {
+    background-color: var(--vscode-inputValidation-errorBackground, var(--vscode-testing-iconFailed));
+    color: var(--vscode-editor-background);
+  }
+  #legend {
+    position: fixed;
+    left: 16px;
+    bottom: 14px;
+    z-index: 9;
+    display: flex;
+    gap: 14px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    font-size: 0.78em;
+    color: var(--vscode-descriptionForeground);
+    background-color: color-mix(in srgb, var(--vscode-editorWidget-background) 88%, transparent);
+    border: 1px solid var(--vscode-panel-border);
+    backdrop-filter: blur(3px);
+  }
+  #legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #legend .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background-color: var(--vscode-descriptionForeground);
+  }
+  #legend .dot.success { background-color: var(--vscode-testing-iconPassed); }
+  #legend .dot.failure { background-color: var(--vscode-testing-iconFailed); }
+  #legend .dot.in_progress { background-color: var(--vscode-testing-iconQueued); }
+  .empty-graph { padding: 24px; color: var(--vscode-descriptionForeground); }
+
+  @keyframes nodeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: no-preference) {
+    #stage.animate .job-node {
+      animation: nodeIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+      animation-delay: calc(var(--i, 0) * 45ms);
+    }
+    #stage.animate #edgesSvg {
+      animation: fadeIn 0.5s ease backwards;
+      animation-delay: 0.15s;
+    }
   }
   #viewport {
     position: absolute;
@@ -1141,22 +1270,39 @@ function showRunDetails(
 </head>
 <body>
   <div class="toolbar">
-    <div>
-      <h1 id="runTitle">${escapeHtml(model.title)}</h1>
-      <span id="statusPill" class="status-pill ${model.statusText}">${model.statusText}</span>
+    <div class="toolbar-info">
+      <div class="title-row">
+        <h1 id="runTitle">${escapeHtml(model.title)}</h1>
+        <span id="statusPill" class="status-pill ${model.statusText}">${model.statusText}</span>
+      </div>
       <div id="metaText" class="meta">${model.metaText}</div>
     </div>
-    <div class="toolbar-buttons">
-      <button id="zoomOut">-</button>
-      <button id="zoomReset">Reset</button>
-      <button id="zoomIn">+</button>
+    <div class="toolbar-actions">
+      <div class="btn-group">
+        <button class="btn" id="btnOpen" title="Open this run on github.com">Open&nbsp;&#8599;</button>
+        <button class="btn" id="btnRerun" title="Rerun all jobs">Rerun&nbsp;&#8635;</button>
+        <button class="btn" id="btnRerunFailed" title="Rerun only the failed jobs">Rerun failed</button>
+        <button class="btn btn-danger" id="btnCancel" title="Cancel this run">Cancel&nbsp;&#10005;</button>
+      </div>
+      <div class="btn-group">
+        <button class="btn icon" id="zoomOut" title="Zoom out">&#8722;</button>
+        <button class="btn" id="zoomLabel" title="Reset to 100%">100%</button>
+        <button class="btn icon" id="zoomIn" title="Zoom in">+</button>
+        <button class="btn" id="zoomFit" title="Fit graph to view (0)">Fit</button>
+      </div>
     </div>
   </div>
-  <div id="viewport">
+  <div id="viewport" tabindex="0">
     <div id="stage" style="width:${model.canvasWidth}px; height:${model.canvasHeight}px;">
       <svg id="edgesSvg" class="edges" width="${model.canvasWidth}" height="${model.canvasHeight}">${model.edgesSvg}</svg>
-      <div id="nodesContainer">${model.nodesHtml || '<p style="padding: 20px;">No jobs found for this run.</p>'}</div>
+      <div id="nodesContainer">${model.nodesHtml || '<p class="empty-graph">No jobs found for this run.</p>'}</div>
     </div>
+  </div>
+  <div id="legend">
+    <span><i class="dot success"></i>Success</span>
+    <span><i class="dot failure"></i>Failure</span>
+    <span><i class="dot in_progress"></i>Running</span>
+    <span><i class="dot"></i>Cancelled</span>
   </div>
   <div id="annotationsPanel">
     <h2>Annotations</h2>
@@ -1166,79 +1312,141 @@ function showRunDetails(
     const vscodeApi = acquireVsCodeApi();
     const viewport = document.getElementById('viewport');
     const stage = document.getElementById('stage');
-    let scale = 1;
-    let originX = 0;
-    let originY = 0;
-    let isDragging = false;
-    let lastX = 0;
-    let lastY = 0;
+    const nodesContainer = document.getElementById('nodesContainer');
+    const zoomLabel = document.getElementById('zoomLabel');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const MIN = 0.3, MAX = 2.5;
+    let canvasWidth = ${model.canvasWidth};
+    let canvasHeight = ${model.canvasHeight};
+    let scale = 1, originX = 0, originY = 0;
+    let isDragging = false, lastX = 0, lastY = 0;
 
     function apply() {
       stage.style.transform = 'translate(' + originX + 'px, ' + originY + 'px) scale(' + scale + ')';
+      zoomLabel.textContent = Math.round(scale * 100) + '%';
+    }
+
+    function fit() {
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      if (!canvasWidth || !canvasHeight) { return; }
+      const s = Math.min(vw / canvasWidth, vh / canvasHeight) * 0.92;
+      scale = Math.max(MIN, Math.min(MAX, s));
+      originX = Math.max(0, (vw - canvasWidth * scale) / 2);
+      originY = Math.max(0, (vh - canvasHeight * scale) / 2);
+      apply();
+    }
+
+    function zoomBy(delta, cx, cy) {
+      const prev = scale;
+      scale = Math.max(MIN, Math.min(MAX, scale + delta));
+      if (cx !== undefined) {
+        // keep the point under the cursor anchored while zooming
+        originX = cx - (cx - originX) * (scale / prev);
+        originY = cy - (cy - originY) * (scale / prev);
+      }
+      apply();
     }
 
     viewport.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      isDragging = true; lastX = e.clientX; lastY = e.clientY;
       viewport.classList.add('dragging');
     });
     window.addEventListener('mousemove', (e) => {
       if (!isDragging) return;
       originX += e.clientX - lastX;
       originY += e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      lastX = e.clientX; lastY = e.clientY;
       apply();
     });
     window.addEventListener('mouseup', () => {
-      isDragging = false;
-      viewport.classList.remove('dragging');
+      isDragging = false; viewport.classList.remove('dragging');
     });
 
     viewport.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      scale = Math.min(2.5, Math.max(0.3, scale + delta));
-      apply();
+      const rect = viewport.getBoundingClientRect();
+      zoomBy(e.deltaY > 0 ? -0.12 : 0.12, e.clientX - rect.left, e.clientY - rect.top);
     }, { passive: false });
 
-    document.getElementById('zoomIn').addEventListener('click', () => {
-      scale = Math.min(2.5, scale + 0.15);
-      apply();
+    document.getElementById('zoomIn').addEventListener('click', () => zoomBy(0.15));
+    document.getElementById('zoomOut').addEventListener('click', () => zoomBy(-0.15));
+    document.getElementById('zoomFit').addEventListener('click', fit);
+    zoomLabel.addEventListener('click', () => { scale = 1; apply(); });
+
+    window.addEventListener('keydown', (e) => {
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === '+' || e.key === '=') zoomBy(0.15);
+      else if (e.key === '-' || e.key === '_') zoomBy(-0.15);
+      else if (e.key === '0') fit();
     });
-    document.getElementById('zoomOut').addEventListener('click', () => {
-      scale = Math.max(0.3, scale - 0.15);
-      apply();
-    });
-    document.getElementById('zoomReset').addEventListener('click', () => {
-      scale = 1;
-      originX = 0;
-      originY = 0;
-      apply();
-    });
+
+    function send(action) { vscodeApi.postMessage({ type: 'action', action: action }); }
+    document.getElementById('btnOpen').addEventListener('click', () => send('open'));
+    document.getElementById('btnRerun').addEventListener('click', () => send('rerun'));
+    document.getElementById('btnRerunFailed').addEventListener('click', () => send('rerunFailed'));
+    document.getElementById('btnCancel').addEventListener('click', () => send('cancel'));
+
+    function updateActions(isRunning, hasFailure) {
+      document.getElementById('btnRerun').style.display = isRunning ? 'none' : '';
+      document.getElementById('btnRerunFailed').style.display = (!isRunning && hasFailure) ? '' : 'none';
+      document.getElementById('btnCancel').style.display = isRunning ? '' : 'none';
+    }
+
+    function runEntrance() {
+      if (reduceMotion) return;
+      stage.classList.add('animate');
+      setTimeout(() => stage.classList.remove('animate'), 1400);
+    }
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type !== 'update') return;
       const model = msg.model;
+      canvasWidth = model.canvasWidth;
+      canvasHeight = model.canvasHeight;
       document.getElementById('runTitle').textContent = model.title;
       const pill = document.getElementById('statusPill');
       pill.textContent = model.statusText;
       pill.className = 'status-pill ' + model.statusText;
       document.getElementById('metaText').innerHTML = model.metaText;
-      document.getElementById('stage').style.width = model.canvasWidth + 'px';
-      document.getElementById('stage').style.height = model.canvasHeight + 'px';
+      stage.style.width = canvasWidth + 'px';
+      stage.style.height = canvasHeight + 'px';
       const svg = document.getElementById('edgesSvg');
-      svg.setAttribute('width', model.canvasWidth);
-      svg.setAttribute('height', model.canvasHeight);
+      svg.setAttribute('width', canvasWidth);
+      svg.setAttribute('height', canvasHeight);
       svg.innerHTML = model.edgesSvg;
-      document.getElementById('nodesContainer').innerHTML = model.nodesHtml || '<p style="padding: 20px;">No jobs found for this run.</p>';
+      nodesContainer.innerHTML = model.nodesHtml || '<p class="empty-graph">No jobs found for this run.</p>';
       document.getElementById('annotationsList').innerHTML = model.annotationsHtml;
+      updateActions(model.isRunning, model.hasFailure);
     });
+
+    updateActions(${model.isRunning}, ${model.hasFailure});
+    requestAnimationFrame(() => { fit(); runEntrance(); });
   </script>
 </body>
 </html>`;
+
+  panel.webview.onDidReceiveMessage(async (msg) => {
+    if (!msg || msg.type !== 'action') {
+      return;
+    }
+    switch (msg.action) {
+      case 'open':
+        vscode.env.openExternal(vscode.Uri.parse(run.html_url));
+        break;
+      case 'rerun':
+        await provider.rerunRun(run);
+        break;
+      case 'rerunFailed':
+        await provider.rerunFailedJobs(run);
+        break;
+      case 'cancel':
+        await provider.cancelRun(run);
+        break;
+    }
+  });
 
   let disposed = false;
   panel.onDidDispose(() => {
@@ -1339,6 +1547,45 @@ export function activate(context: vscode.ExtensionContext) {
       const url = typeof arg === 'string' ? arg : arg?.run?.html_url;
       if (url) {
         vscode.env.openExternal(vscode.Uri.parse(url));
+      }
+    }),
+
+    vscode.commands.registerCommand('ghaRunsViewer.copyRunUrl', async (item: RunItem) => {
+      if (item?.run?.html_url) {
+        await vscode.env.clipboard.writeText(item.run.html_url);
+        vscode.window.showInformationMessage(`Copied run URL for #${item.run.run_number}.`);
+      }
+    }),
+
+    vscode.commands.registerCommand('ghaRunsViewer.cancelRun', async (item: RunItem) => {
+      if (!item?.run) {
+        return;
+      }
+      const confirm = await vscode.window.showWarningMessage(
+        `Cancel run #${item.run.run_number} ${item.run.display_title || item.run.name}?`,
+        { modal: true },
+        'Cancel Run'
+      );
+      if (confirm === 'Cancel Run') {
+        await provider.cancelRun(item.run);
+      }
+    }),
+
+    vscode.commands.registerCommand('ghaRunsViewer.filterStatus', async () => {
+      const current = provider.getFilter();
+      const picks = [
+        { label: 'All runs', value: null },
+        { label: 'Success', value: 'success' },
+        { label: 'Failure', value: 'failure' },
+        { label: 'In progress', value: 'in_progress' },
+        { label: 'Cancelled', value: 'cancelled' }
+      ];
+      const choice = await vscode.window.showQuickPick(
+        picks.map((p) => ({ label: (p.value === current ? '$(check) ' : '') + p.label, value: p.value })),
+        { placeHolder: 'Filter workflow runs by status' }
+      );
+      if (choice !== undefined) {
+        provider.setFilter(choice.value);
       }
     }),
 

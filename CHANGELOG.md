@@ -2,6 +2,28 @@
 
 All notable changes to this extension are documented here.
 
+## 0.9.0
+
+- **Cancel runs** — cancel an in-progress workflow run from the sidebar context menu or
+  the run graph toolbar.
+- **In-view actions** — the run graph toolbar now has Open, Rerun, Rerun failed, and
+  Cancel buttons that adapt to the run's state.
+- **Copy run URL** — new context-menu command.
+- **Status filter** — a filter button in the view title narrows the list to success,
+  failure, in-progress, or cancelled runs.
+- **Graph UX** — auto fit-to-view on open, cursor-anchored zoom with a live zoom
+  readout, a Fit control, keyboard shortcuts (`+` / `-` / `0`), a status legend, and a
+  staggered node entrance that respects `prefers-reduced-motion`.
+
+## 0.8.0
+
+- Added syntax highlighting for GitHub Actions `${{ ... }}` expressions inside workflow
+  YAML (contexts, functions, operators, and literals), delivered as a TextMate injection
+  grammar so it layers on top of the built-in YAML highlighting without changing the
+  file's language or breaking YAML schema validation.
+- Renamed the extension to **GitHub Actions Workflow Visualizer** and improved
+  marketplace metadata (description, keywords, categories, icon) for discoverability.
+
 ## 0.7.0
 
 - Requires VS Code 1.82+ / Node 18, matching the global `fetch` API the extension

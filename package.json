@@ -1,8 +1,8 @@
 {
   "name": "github-actions-workflow-visualizer",
   "displayName": "GitHub Actions Workflow Visualizer",
-  "description": "View, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job graph. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
-  "version": "0.7.0",
+  "description": "Visualize, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job dependency graph and syntax highlighting for workflow expressions. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
+  "version": "0.9.0",
   "publisher": "TFSG28",
   "license": "MIT",
   "author": "Tiago Gonçalves",
@@ -12,6 +12,7 @@
   },
   "categories": [
     "Visualization",
+    "Programming Languages",
     "Other"
   ],
   "keywords": [
@@ -20,15 +21,25 @@
     "actions",
     "workflow",
     "workflows",
+    "workflow visualizer",
     "ci",
     "cd",
     "ci/cd",
     "pipeline",
+    "pipelines",
     "runs",
+    "run monitor",
+    "job graph",
+    "dependency graph",
+    "yaml",
+    "syntax highlighting",
+    "expressions",
     "devops",
+    "automation",
     "kiro",
     "cursor",
-    "windsurf"
+    "windsurf",
+    "vscodium"
   ],
   "galleryBanner": {
     "color": "#0d1117",
@@ -42,9 +53,6 @@
   "bugs": {
     "url": "https://github.com/TFSG28/github-actions-workflow-visualizer/issues"
   },
-  "activationEvents": [
-    "onView:ghaRunsView"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -75,6 +83,20 @@
         "icon": "$(debug-restart)"
       },
       {
+        "command": "ghaRunsViewer.cancelRun",
+        "title": "Cancel Workflow Run",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "ghaRunsViewer.copyRunUrl",
+        "title": "GHA Runs: Copy Run URL"
+      },
+      {
+        "command": "ghaRunsViewer.filterStatus",
+        "title": "GHA Runs: Filter by Status",
+        "icon": "$(filter)"
+      },
+      {
         "command": "ghaRunsViewer.viewRunDetails",
         "title": "View Run Details"
       }
@@ -99,34 +121,63 @@
     "menus": {
       "view/title": [
         {
+          "command": "ghaRunsViewer.filterStatus",
+          "when": "view == ghaRunsView",
+          "group": "navigation@1"
+        },
+        {
           "command": "ghaRunsViewer.refresh",
           "when": "view == ghaRunsView",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
         {
           "command": "ghaRunsViewer.rerunRun",
-          "when": "view == ghaRunsView && viewItem == ghaRun",
-          "group": "inline"
+          "when": "view == ghaRunsView && viewItem =~ /ghaRun/",
+          "group": "inline@1"
+        },
+        {
+          "command": "ghaRunsViewer.cancelRun",
+          "when": "view == ghaRunsView && viewItem == ghaRunRunning",
+          "group": "inline@2"
         },
         {
           "command": "ghaRunsViewer.viewRunDetails",
-          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "when": "view == ghaRunsView && viewItem =~ /ghaRun/",
           "group": "1_actions@1"
         },
         {
           "command": "ghaRunsViewer.rerunRun",
-          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "when": "view == ghaRunsView && viewItem =~ /ghaRun/",
           "group": "1_actions@2"
         },
         {
-          "command": "ghaRunsViewer.openRun",
-          "when": "view == ghaRunsView && viewItem == ghaRun",
+          "command": "ghaRunsViewer.cancelRun",
+          "when": "view == ghaRunsView && viewItem == ghaRunRunning",
           "group": "1_actions@3"
+        },
+        {
+          "command": "ghaRunsViewer.openRun",
+          "when": "view == ghaRunsView && viewItem =~ /ghaRun/",
+          "group": "1_actions@4"
+        },
+        {
+          "command": "ghaRunsViewer.copyRunUrl",
+          "when": "view == ghaRunsView && viewItem =~ /ghaRun/",
+          "group": "1_actions@5"
         }
       ]
     },
+    "grammars": [
+      {
+        "scopeName": "github-actions-expressions.injection",
+        "path": "./syntaxes/github-actions-expressions.tmLanguage.json",
+        "injectTo": [
+          "source.yaml"
+        ]
+      }
+    ],
     "configuration": {
       "title": "GHA Runs Viewer",
       "properties": {
@@ -151,7 +202,8 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
     "icon": "node scripts/generate-icon.mjs",
-    "package": "npm run build && vsce package --no-dependencies",
+    "check": "node scripts/check-grammar.mjs",
+    "package": "npm run check && npm run build && vsce package --no-dependencies",
     "publish:ovsx": "ovsx publish --no-dependencies"
   },
   "devDependencies": {

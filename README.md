@@ -17,7 +17,16 @@ official GitHub Actions extension can't detect your repository, including **Kiro
   the workflow's `needs:`), with per-job steps, durations, and success/failure state.
 - **Inline error & warning annotations** — failures and warnings surfaced per job,
   with file and line references where available.
-- **Rerun from the editor** — rerun all jobs or only the failed jobs of any run.
+- **Workflow expression highlighting** — syntax highlighting for GitHub Actions
+  `${{ ... }}` expressions inside your workflow YAML (contexts, functions, operators,
+  and literals), layered on top of the built-in YAML highlighting.
+- **Act without leaving the run view** — Open on github.com, rerun all jobs, rerun only
+  failed jobs, or cancel an in-progress run, straight from the run graph's toolbar.
+- **Rerun and cancel from the sidebar** — rerun all/failed jobs, cancel running runs, or
+  copy a run's URL from the context menu.
+- **Filter by status** — narrow the sidebar to success, failure, in-progress, or cancelled.
+- **Fluid graph navigation** — pan, cursor-anchored zoom, fit-to-view, and keyboard
+  shortcuts (`+` / `-` / `0`), with a status legend and a smooth staggered reveal.
 - **Works without a git provider** — auto-detects `owner/repo` from `.git/config`,
   or set it manually. No GitHub sign-in flow required.
 - **Rate-limit friendly** — conditional `ETag` requests mean unchanged polls don't
@@ -44,9 +53,12 @@ official GitHub Actions extension can't detect your repository, including **Kiro
 | `GHA Runs: Set GitHub Token` | Store a Personal Access Token in secret storage. |
 | `GHA Runs: Clear GitHub Token` | Remove the stored token. |
 | `GHA Runs: Set Repository (owner/repo)` | Manually set the repository to query. |
+| `GHA Runs: Filter by Status` | Filter the sidebar by run status. |
 | `GHA Runs: Refresh` | Refresh the run list now. |
 | `GHA Runs: Open Run in Browser` | Open the selected run on github.com. |
+| `GHA Runs: Copy Run URL` | Copy the selected run's URL to the clipboard. |
 | `Rerun Workflow...` | Rerun all jobs or only failed jobs. |
+| `Cancel Workflow Run` | Cancel an in-progress run. |
 | `View Run Details` | Open the interactive run graph. |
 
 ## Settings

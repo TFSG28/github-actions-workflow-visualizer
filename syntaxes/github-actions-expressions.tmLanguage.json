@@ -1,0 +1,58 @@
+{
+  "name": "GitHub Actions Expressions",
+  "scopeName": "github-actions-expressions.injection",
+  "injectionSelector": "L:source.yaml",
+  "patterns": [{ "include": "#expression" }],
+  "repository": {
+    "expression": {
+      "name": "meta.embedded.expression.github-actions",
+      "begin": "\\$\\{\\{",
+      "end": "\\}\\}",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.template-expression.begin.github-actions" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.template-expression.end.github-actions" }
+      },
+      "patterns": [
+        { "include": "#function" },
+        { "include": "#context" },
+        { "include": "#operator" },
+        { "include": "#string" },
+        { "include": "#constant" },
+        { "include": "#number" },
+        { "include": "#property" }
+      ]
+    },
+    "function": {
+      "match": "\\b(contains|startsWith|endsWith|format|join|toJSON|fromJSON|hashFiles|success|always|cancelled|failure)\\b(?=\\s*\\()",
+      "name": "support.function.github-actions"
+    },
+    "context": {
+      "match": "\\b(github|env|vars|job|jobs|steps|runner|secrets|strategy|matrix|needs|inputs)\\b",
+      "name": "support.constant.github-actions"
+    },
+    "operator": {
+      "match": "==|!=|<=|>=|<|>|&&|\\|\\||!",
+      "name": "keyword.operator.github-actions"
+    },
+    "string": {
+      "name": "string.quoted.single.github-actions",
+      "begin": "'",
+      "end": "'",
+      "patterns": [{ "match": "''", "name": "constant.character.escape.github-actions" }]
+    },
+    "constant": {
+      "match": "\\b(true|false|null)\\b",
+      "name": "constant.language.github-actions"
+    },
+    "number": {
+      "match": "\\b-?\\d+(\\.\\d+)?\\b",
+      "name": "constant.numeric.github-actions"
+    },
+    "property": {
+      "match": "\\.\\s*([A-Za-z_][A-Za-z0-9_-]*)",
+      "captures": { "1": { "name": "variable.other.property.github-actions" } }
+    }
+  }
+}
