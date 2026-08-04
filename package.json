@@ -2,7 +2,7 @@
   "name": "github-actions-workflow-visualizer",
   "displayName": "GitHub Actions Workflow Visualizer",
   "description": "Visualize, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job dependency graph and syntax highlighting for workflow expressions. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "publisher": "TFSG28",
   "license": "MIT",
   "author": "Tiago Gonçalves",
@@ -54,6 +54,9 @@
     "url": "https://github.com/TFSG28/github-actions-workflow-visualizer/issues"
   },
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:ghaRunsView"
+  ],
   "contributes": {
     "commands": [
       {
@@ -99,6 +102,10 @@
       {
         "command": "ghaRunsViewer.viewRunDetails",
         "title": "View Run Details"
+      },
+      {
+        "command": "ghaRunsViewer.dispatchWorkflow",
+        "title": "GHA Runs: Dispatch Workflow"
       }
     ],
     "viewsContainers": {
@@ -178,6 +185,13 @@
         ]
       }
     ],
+    "keybindings": [
+      {
+        "command": "ghaRunsViewer.refresh",
+        "key": "ctrl+shift+r",
+        "when": "view == ghaRunsView"
+      }
+    ],
     "configuration": {
       "title": "GHA Runs Viewer",
       "properties": {
@@ -211,7 +225,10 @@
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
     "icon": "node scripts/generate-icon.mjs",
     "check": "node scripts/check-grammar.mjs && node scripts/check-detect.mjs",
-    "package": "npm run check && npm run build && vsce package --no-dependencies",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run typecheck && npm run check && npm run build && vsce package --no-dependencies",
     "publish:ovsx": "ovsx publish --no-dependencies"
   },
   "devDependencies": {
@@ -220,6 +237,7 @@
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "ovsx": "^1.0.2",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.10"
   }
 }

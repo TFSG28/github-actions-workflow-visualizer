@@ -2,6 +2,31 @@
 
 All notable changes to this extension are documented here.
 
+## 0.9.4
+
+- **Refactored into modules.** The monolithic `extension.ts` (~1,880 lines) is now
+  split into `types.ts`, `utils.ts`, `deps.ts`, `graph.ts`, `provider.ts`,
+  `webview.ts`, and a slim `extension.ts`. Easier to navigate, maintain, and extend.
+- **Lazy activation.** The extension now declares `activationEvents` so it only
+  activates when the GHA Runs sidebar is opened, not on editor startup.
+- **Debug output channel.** All API calls, errors, and repo-detection info are now
+  logged to a dedicated **GHA Runs Viewer** output panel for easier troubleshooting.
+- **ETag caching for jobs.** The jobs endpoint (polled every 8s for in-progress runs)
+  now sends `If-None-Match` headers and reuses cached results on `304`, so polling
+  no longer eats into your rate-limit quota.
+- **Job pagination.** The extension now follows `Link` headers to paginate through
+  job lists, supporting workflows with more than 30 jobs (up to 500).
+- **Workflow dispatch.** New **GHA Runs: Dispatch Workflow** command lets you trigger
+  a new workflow run on any branch/tag with optional JSON inputs.
+- **Improved dependency parser.** `needs:` declarations with inline or trailing
+  comments are now parsed correctly.
+- **Keyboard shortcuts.** `Ctrl+Shift+R` now refreshes the sidebar when it has focus.
+- **Typechecking.** A `typecheck` script (`tsc --noEmit`) runs before packaging to
+  catch TypeScript errors early.
+- **Unit tests.** 19 vitest tests cover the dependency parser, git-config URL parsing,
+  and repo detection logic.
+- **Package script** now runs typecheck, grammar/detect checks, then build.
+
 ## 0.9.3
 
 - **Fixed run details panel breaking on refresh.** Reopening or re-clicking a run

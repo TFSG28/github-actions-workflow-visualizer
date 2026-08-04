@@ -8,6 +8,7 @@ extracted_vsix/**
 gha.zip
 *.vsix
 tsconfig.json
+vitest.config.ts
 .gitignore
 .vscodeignore
 .impeccable.md
