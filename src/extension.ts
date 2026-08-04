@@ -161,19 +161,52 @@ function detectReposFromGitConfig(): string[] {
   }
 
   const repos: string[] = [];
-  for (const folder of folders) {
-    const gitConfigPath = resolveGitConfigPath(folder.uri.fsPath);
-    if (!gitConfigPath) {
-      continue;
+
+  const seen = new Set<string>();
+
+  /** Try to extract an owner/repo slug from a folder path (root or direct
+   *  subdirectory).  Pushes onto `repos` on success, deduped by the `seen` set. */
+  const tryDetect = (dirPath: string) => {
+    const cfg = resolveGitConfigPath(dirPath);
+    if (!cfg) {
+      return;
     }
     try {
-      const contents = fs.readFileSync(gitConfigPath, 'utf8');
+      const contents = fs.readFileSync(cfg, 'utf8');
       const match = parseGithubRepoFromGitConfig(contents);
       if (match) {
-        repos.push(match);
+        const key = match.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          repos.push(match);
+        }
       }
     } catch {
-      // Ignore and try the next folder.
+      // Ignore and continue.
+    }
+  };
+
+  // Directories we never want to descend into when scanning for nested repos.
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.vscode', 'coverage', '__pycache__']);
+
+  for (const folder of folders) {
+    const rootPath = folder.uri.fsPath;
+
+    // 1. Try the workspace-folder root itself.
+    tryDetect(rootPath);
+
+    // 2. Scan direct subdirectories so nested repos (e.g. a monorepo with
+    //    frontend/ and backend/ each carrying their own .git) are discovered.
+    try {
+      const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || SKIP_DIRS.has(entry.name)) {
+          continue;
+        }
+        tryDetect(path.join(rootPath, entry.name));
+      }
+    } catch {
+      // readdir failed — skip this folder.
     }
   }
   return repos;
@@ -1018,7 +1051,15 @@ function buildRunModel(
 
 interface LivePanelHandle {
   panel: vscode.WebviewPanel;
+  /** Stop the poll timer so it won't fire after disposal. */
+  stopPoll: () => void;
 }
+
+/** Track the single active run-details panel so we can clean it up before opening a
+ *  new one.  Without this, clicking a run while the details panel is already open
+ *  would create a second poll loop, duplicate event handlers, and stale references
+ *  — causing status updates to stop arriving in the webview. */
+let activeRunDetailsPanel: LivePanelHandle | null = null;
 
 function showRunDetails(
   provider: RunsProvider,
@@ -1027,6 +1068,15 @@ function showRunDetails(
   deps: Map<string, string[]> | null,
   annotationsByJob: Map<number, Annotation[]>
 ): void {
+  // If a panel is already open, dispose it so we don't leak poll loops and event
+  // handlers.  createWebviewPanel reuses the same viewType slot, so a lingering
+  // panel would leak the old poll + duplicate the message/dispose listeners.
+  if (activeRunDetailsPanel) {
+    activeRunDetailsPanel.stopPoll();
+    activeRunDetailsPanel.panel.dispose();
+    activeRunDetailsPanel = null;
+  }
+
   const panel = vscode.window.createWebviewPanel(
     'ghaRunDetails',
     `Run #${run.run_number}`,
@@ -1570,8 +1620,23 @@ function showRunDetails(
   });
 
   let disposed = false;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const stopPoll = () => {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  activeRunDetailsPanel = { panel, stopPoll };
+
   panel.onDidDispose(() => {
     disposed = true;
+    stopPoll();
+    if (activeRunDetailsPanel?.panel === panel) {
+      activeRunDetailsPanel = null;
+    }
   });
 
   const poll = async () => {
@@ -1581,7 +1646,7 @@ function showRunDetails(
     // Don't spend API calls while the panel is in a background tab; just
     // reschedule and pick up again when it's visible.
     if (!panel.visible) {
-      setTimeout(poll, 8000);
+      pollTimer = setTimeout(poll, 8000);
       return;
     }
     const freshRun = (await provider.fetchSingleRun(run)) || run;
@@ -1597,12 +1662,12 @@ function showRunDetails(
     jobs = freshJobs;
 
     if (freshRun.status !== 'completed' && !disposed) {
-      setTimeout(poll, 8000);
+      pollTimer = setTimeout(poll, 8000);
     }
   };
 
   if (run.status !== 'completed') {
-    setTimeout(poll, 8000);
+    pollTimer = setTimeout(poll, 8000);
   }
 }
 

@@ -2,7 +2,7 @@
   "name": "github-actions-workflow-visualizer",
   "displayName": "GitHub Actions Workflow Visualizer",
   "description": "Visualize, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job dependency graph and syntax highlighting for workflow expressions. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "publisher": "TFSG28",
   "license": "MIT",
   "author": "Tiago Gonçalves",

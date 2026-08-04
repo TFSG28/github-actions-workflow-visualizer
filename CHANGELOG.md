@@ -2,6 +2,16 @@
 
 All notable changes to this extension are documented here.
 
+## 0.9.3
+
+- **Fixed run details panel breaking on refresh.** Reopening or re-clicking a run
+  while its details panel was already open no longer creates duplicate poll loops and
+  stale event handlers, so live status updates keep arriving correctly.
+- **Fixed auto-detection missing nested repos.** Workspace folders containing
+  subdirectories with their own `.git` repos (e.g. a monorepo with `frontend/` and
+  `backend/`) are now discovered by scanning one level deep, skipping common
+  non-repo directories like `node_modules` and `dist`.
+
 ## 0.9.2
 
 - **Fixed repository auto-detection.** Tree items now have stable ids, so repository
