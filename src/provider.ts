@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { WorkflowRun, RunJob, Annotation } from './types';
+import type { WorkflowRun, RunJob, Annotation, WorkflowListItem } from './types';
 import { TOKEN_SECRET_KEY, iconForState } from './utils';
 import { parseGithubRepoFromGitConfig } from './gitConfig';
 import { parseJobDependencies } from './deps';
@@ -718,6 +718,108 @@ export class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     }
   }
 
+  /** List workflows for a repo via the GitHub REST API. */
+  async listWorkflows(repo: string): Promise<WorkflowListItem[] | null> {
+    const headers = await this.authHeaders();
+    if (!headers) {
+      return null;
+    }
+    const [owner, repoName] = repo.split('/');
+    const url = `https://api.github.com/repos/${owner}/${repoName}/actions/workflows?per_page=100`;
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        const body = await response.text();
+        vscode.window.showErrorMessage(
+          `Failed to list workflows: ${response.status} ${response.statusText} ${body}`
+        );
+        return null;
+      }
+      const data = (await response.json()) as { workflows?: WorkflowListItem[] };
+      return data.workflows || [];
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to list workflows: ${err?.message || String(err)}`);
+      return null;
+    }
+  }
+
+  /** Read a workflow file's raw text from the repo's default branch. */
+  async readWorkflowFile(repo: string, workflowPath: string): Promise<string | null> {
+    const headers = await this.authHeaders();
+    if (!headers) {
+      return null;
+    }
+    const [owner, repoName] = repo.split('/');
+    const url = `https://api.github.com/repos/${owner}/${repoName}/contents/${workflowPath}`;
+    try {
+      const response = await fetch(url, {
+        headers: { ...headers, Accept: 'application/vnd.github.raw' }
+      });
+      if (!response.ok) {
+        return null;
+      }
+      return await response.text();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fetch the repo's branch names and default branch (for the ref picker). */
+  async listBranches(
+    repo: string
+  ): Promise<{ branches: string[]; defaultBranch: string } | null> {
+    const headers = await this.authHeaders();
+    if (!headers) {
+      return null;
+    }
+    const [owner, repoName] = repo.split('/');
+    const base = `https://api.github.com/repos/${owner}/${repoName}`;
+    try {
+      const [repoResp, branchesResp] = await Promise.all([
+        fetch(base, { headers }),
+        fetch(`${base}/branches?per_page=100`, { headers })
+      ]);
+
+      let defaultBranch = '';
+      if (repoResp.ok) {
+        const info = (await repoResp.json()) as { default_branch?: string };
+        defaultBranch = info.default_branch || '';
+      }
+
+      const branches: string[] = [];
+      if (branchesResp.ok) {
+        const data = (await branchesResp.json()) as { name: string }[];
+        branches.push(...data.map((b) => b.name));
+      }
+      return { branches, defaultBranch };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * List configured deployment environments. Returns null when the token lacks
+   * the required scope, so callers can fall back to a plain input.
+   */
+  async listEnvironments(repo: string): Promise<string[] | null> {
+    const headers = await this.authHeaders();
+    if (!headers) {
+      return null;
+    }
+    const [owner, repoName] = repo.split('/');
+    const url = `https://api.github.com/repos/${owner}/${repoName}/environments?per_page=100`;
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        return null;
+      }
+      const data = (await response.json()) as { environments?: { name: string }[] };
+      return (data.environments || []).map((e) => e.name);
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Dispatch a workflow (trigger a new run). Requires a workflow file name or ID
    * and an optional ref (branch/tag) and inputs object.
@@ -726,7 +828,8 @@ export class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     repo: string,
     workflowId: string,
     ref: string,
-    inputs: Record<string, string> | null
+    inputs: Record<string, string> | null,
+    label?: string
   ): Promise<void> {
     const headers = await this.authHeaders();
     if (!headers) {
@@ -746,7 +849,9 @@ export class RunsProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         body: JSON.stringify(body)
       });
       if (response.status === 204) {
-        vscode.window.showInformationMessage(`Workflow dispatch triggered for ${workflowId} on ${ref}.`);
+        vscode.window.showInformationMessage(
+          `Workflow dispatch triggered for ${label || workflowId} on ${ref}.`
+        );
         setTimeout(() => this.refresh(), 2000);
       } else {
         const respBody = await response.text();

@@ -2,6 +2,21 @@
 
 All notable changes to this extension are documented here.
 
+## 0.10.0
+
+- **Guided "Run Workflow" flow.** The `Run Workflow...` command (formerly
+  `Dispatch Workflow`, now also available as a ▶ button in the sidebar title) now
+  works like the github.com "Run workflow" dialog instead of a free-text JSON prompt:
+  - Picks the repository and lists its active workflows.
+  - Reads each workflow's file to detect its `workflow_dispatch` trigger and the
+    inputs it declares (`choice`, `boolean`, `string`, and `environment` types).
+  - Lets you choose the branch (default branch highlighted) and answers each input
+    with a dropdown for choices/booleans/environments and a pre-filled input for
+    strings, honoring defaults and required-ness.
+  - Warns when the selected workflow has no `workflow_dispatch` trigger.
+- Added a real YAML parser (the `yaml` package, bundled into the extension) so
+  workflow inputs are parsed reliably across all the ways YAML can express them.
+
 ## 0.9.4
 
 - **Refactored into modules.** The monolithic `extension.ts` (~1,880 lines) is now

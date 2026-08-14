@@ -2,6 +2,71 @@ import * as vscode from 'vscode';
 import { RunsProvider, RunItem, getOutputChannel } from './provider';
 import { showRunDetails, disposeActivePanel } from './webview';
 import { TOKEN_SECRET_KEY } from './utils';
+import { parseWorkflowDispatch } from './workflow';
+import type { WorkflowDispatchInput } from './types';
+
+/**
+ * Prompt the user for a single `workflow_dispatch` input, using a QuickPick for
+ * `choice`, `boolean`, and `environment` inputs and an InputBox for strings.
+ */
+async function promptForInput(
+  input: WorkflowDispatchInput,
+  provider: RunsProvider,
+  repo: string
+): Promise<string | undefined> {
+  const title = `Input: ${input.name}${input.required ? ' (required)' : ''}`;
+  const hint = input.description || input.name;
+  const def = input.default != null ? String(input.default) : undefined;
+
+  if (input.type === 'boolean') {
+    const isTrue = input.default === true || input.default === 'true';
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: 'true', description: isTrue ? 'default' : undefined, picked: isTrue },
+        { label: 'false', description: isTrue ? undefined : 'default', picked: !isTrue }
+      ],
+      { title, placeHolder: hint }
+    );
+    return pick?.label;
+  }
+
+  if (input.type === 'choice' && Array.isArray(input.options) && input.options.length > 0) {
+    const pick = await vscode.window.showQuickPick(
+      input.options.map((option) => ({
+        label: option,
+        description: option === def ? 'default' : undefined,
+        picked: option === def
+      })),
+      { title, placeHolder: hint }
+    );
+    return pick?.label;
+  }
+
+  if (input.type === 'environment') {
+    const environments = await provider.listEnvironments(repo);
+    if (environments && environments.length > 0) {
+      const pick = await vscode.window.showQuickPick(
+        environments.map((name) => ({
+          label: name,
+          description: name === def ? 'default' : undefined,
+          picked: name === def
+        })),
+        { title, placeHolder: hint }
+      );
+      return pick?.label;
+    }
+    // Environments can't be listed (missing scope or none configured): fall back
+    // to a free-text input.
+  }
+
+  return vscode.window.showInputBox({
+    title,
+    prompt: hint,
+    value: def ?? '',
+    ignoreFocusOut: true,
+    validateInput: input.required ? (v) => (v.trim() ? undefined : 'This input is required') : undefined
+  });
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const log = getOutputChannel();
@@ -173,7 +238,7 @@ export function activate(context: vscode.ExtensionContext) {
       showRunDetails(provider, run, jobs, deps, annotationsByJob);
     }),
 
-    // ── Dispatch workflow ──
+    // ── Run workflow (guided dispatch, like the GitHub web UI) ──
     vscode.commands.registerCommand('ghaRunsViewer.dispatchWorkflow', async () => {
       const repos = provider.getResolvedRepos();
       if (repos.length === 0) {
@@ -184,44 +249,86 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const repoSel = repos.length === 1 ? { label: repos[0] } : await vscode.window.showQuickPick(
         repos.map((r) => ({ label: r })),
-        { placeHolder: 'Select repository to dispatch a workflow on' }
+        { placeHolder: 'Select repository to run a workflow on' }
       );
       if (!repoSel) {
         return;
       }
       const repo = repoSel.label;
-      const workflowId = await vscode.window.showInputBox({
-        prompt: 'Workflow file name or ID (e.g. "ci.yml" or numeric ID)',
-        placeHolder: 'ci.yml',
-        ignoreFocusOut: true
-      });
-      if (!workflowId) {
+
+      // 1. Pick a workflow.
+      const workflows = await provider.listWorkflows(repo);
+      if (workflows === null) {
         return;
       }
-      const ref = await vscode.window.showInputBox({
-        prompt: 'Git ref (branch or tag) to dispatch on',
-        value: 'main',
-        ignoreFocusOut: true
-      });
+      const active = workflows.filter((w) => w.state === 'active');
+      if (active.length === 0) {
+        vscode.window.showErrorMessage(`No active workflows found in ${repo}.`);
+        return;
+      }
+      const workflowSel = await vscode.window.showQuickPick(
+        active.map((w) => ({ label: w.name, description: w.path, workflow: w })),
+        { placeHolder: 'Select a workflow to run' }
+      );
+      if (!workflowSel) {
+        return;
+      }
+      const workflow = workflowSel.workflow;
+
+      // 2. Inspect the workflow file for a workflow_dispatch trigger and its inputs.
+      const fileText = await provider.readWorkflowFile(repo, workflow.path);
+      if (fileText === null) {
+        vscode.window.showErrorMessage(`Could not read ${workflow.path} from ${repo}.`);
+        return;
+      }
+      const { hasWorkflowDispatch, inputs } = parseWorkflowDispatch(fileText);
+      if (!hasWorkflowDispatch) {
+        vscode.window.showWarningMessage(
+          `"${workflow.name}" has no workflow_dispatch trigger, so it cannot be run manually.`
+        );
+        return;
+      }
+
+      // 3. Pick the branch to run on.
+      const branches = await provider.listBranches(repo);
+      let ref: string | undefined;
+      if (branches && branches.branches.length > 0) {
+        const def = branches.defaultBranch || branches.branches[0];
+        const pick = await vscode.window.showQuickPick(
+          branches.branches.map((name) => ({
+            label: name,
+            description: name === def ? 'default' : undefined
+          })),
+          { placeHolder: 'Select the branch to run on' }
+        );
+        ref = pick?.label;
+      } else {
+        ref = await vscode.window.showInputBox({
+          prompt: 'Git ref (branch or tag) to run on',
+          value: branches?.defaultBranch || 'main',
+          ignoreFocusOut: true
+        });
+      }
       if (!ref) {
         return;
       }
-      // Optional inputs
-      const inputsStr = await vscode.window.showInputBox({
-        prompt: 'Optional JSON inputs (e.g. {"name": "value"}), or leave empty',
-        placeHolder: '{}',
-        ignoreFocusOut: true
-      });
-      let inputs: Record<string, string> | null = null;
-      if (inputsStr && inputsStr.trim()) {
-        try {
-          inputs = JSON.parse(inputsStr);
-        } catch {
-          vscode.window.showErrorMessage('Invalid JSON for inputs.');
+
+      // 4. Collect each typed input declared by the workflow.
+      const values: Record<string, string> = {};
+      for (const input of inputs) {
+        const value = await promptForInput(input, provider, repo);
+        if (value === undefined) {
+          return; // user cancelled the flow
+        }
+        if (input.required && !value) {
+          vscode.window.showErrorMessage(`"${input.name}" is required.`);
           return;
         }
+        values[input.name] = value;
       }
-      await provider.dispatchWorkflow(repo, workflowId, ref, inputs);
+
+      // 5. Dispatch.
+      await provider.dispatchWorkflow(repo, String(workflow.id), ref, values, workflow.name);
     })
   );
 

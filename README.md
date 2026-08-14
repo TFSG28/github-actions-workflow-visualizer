@@ -24,6 +24,9 @@ official GitHub Actions extension can't detect your repository, including **Kiro
   failed jobs, or cancel an in-progress run, straight from the run graph's toolbar.
 - **Rerun and cancel from the sidebar** — rerun all/failed jobs, cancel running runs, or
   copy a run's URL from the context menu.
+- **Run workflow** — trigger a `workflow_dispatch` run the same way as github.com: pick
+  the workflow, choose a branch, and answer each input with its declared type
+  (`choice`, `boolean`, `string`, `environment`), defaults and required-ness respected.
 - **Filter by status** — narrow the sidebar to success, failure, in-progress, or cancelled.
 - **Fluid graph navigation** — pan, cursor-anchored zoom, fit-to-view, and keyboard
   shortcuts (`+` / `-` / `0`), with a status legend and a smooth staggered reveal.
@@ -64,6 +67,7 @@ official GitHub Actions extension can't detect your repository, including **Kiro
 | `Rerun Workflow...` | Rerun all jobs or only failed jobs. |
 | `Cancel Workflow Run` | Cancel an in-progress run. |
 | `View Run Details` | Open the interactive run graph. |
+| `Run Workflow...` | Trigger a `workflow_dispatch` run: pick the workflow, branch, and typed inputs. |
 
 ## Settings
 

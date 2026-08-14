@@ -65,3 +65,21 @@ export interface LivePanelHandle {
   /** Stop the poll timer so it won't fire after disposal. */
   stopPoll: () => void;
 }
+
+/** A workflow as returned by `GET /repos/{owner}/{repo}/actions/workflows`. */
+export interface WorkflowListItem {
+  id: number;
+  name: string;
+  path: string;
+  state: string;
+}
+
+/** A single `workflow_dispatch` input declared in a workflow file. */
+export interface WorkflowDispatchInput {
+  name: string;
+  description: string;
+  type: string;
+  required: boolean;
+  default: string | number | boolean | null;
+  options?: string[];
+}

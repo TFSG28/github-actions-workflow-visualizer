@@ -2,7 +2,7 @@
   "name": "github-actions-workflow-visualizer",
   "displayName": "GitHub Actions Workflow Visualizer",
   "description": "Visualize, monitor and rerun GitHub Actions workflow runs from a sidebar, with an interactive job dependency graph and syntax highlighting for workflow expressions. Talks to the GitHub REST API directly, so it works in Kiro, Cursor, Windsurf and other VS Code forks where the official extension can't detect the repo.",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "publisher": "TFSG28",
   "license": "MIT",
   "author": "Tiago Gonçalves",
@@ -105,7 +105,8 @@
       },
       {
         "command": "ghaRunsViewer.dispatchWorkflow",
-        "title": "GHA Runs: Dispatch Workflow"
+        "title": "Run Workflow...",
+        "icon": "$(play)"
       }
     ],
     "viewsContainers": {
@@ -136,6 +137,11 @@
           "command": "ghaRunsViewer.refresh",
           "when": "view == ghaRunsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "ghaRunsViewer.dispatchWorkflow",
+          "when": "view == ghaRunsView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -239,5 +245,8 @@
     "ovsx": "^1.0.2",
     "typescript": "^5.4.0",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
   }
 }
